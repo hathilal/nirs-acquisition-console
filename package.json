@@ -3,10 +3,17 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "npm run dev --workspace @nirs/web",
     "build": "npm run build --workspace @nirs/web",
     "typecheck": "npm run typecheck --workspace @nirs/web"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.118.0"
   }
 }

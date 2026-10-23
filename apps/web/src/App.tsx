@@ -48,7 +48,6 @@ export default function App() {
   const [deviceName, setDeviceName] = useState("Simulated optical sensor");
   const [lastPacket, setLastPacket] = useState("Demo signal");
   const [sampleCount, setSampleCount] = useState(90);
-  const [startedAt] = useState(Date.now());
   const [notice, setNotice] = useState("Demo data is active. Connect your ESP32 after confirming its BLE UUIDs and packet format.");
   const deviceRef = useRef<BleDevice | null>(null);
   const characteristicRef = useRef<BleCharacteristic | null>(null);
@@ -71,7 +70,6 @@ export default function App() {
   const delta = latest - previous;
   const min = useMemo(() => samples.length ? Math.min(...samples.map((s) => s.intensity)) : 0, [samples]);
   const max = useMemo(() => samples.length ? Math.max(...samples.map((s) => s.intensity)) : 0, [samples]);
-  const elapsed = formatElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
 
   const connectBle = useCallback(async () => {
     const bluetooth = (navigator as BluetoothNavigator).bluetooth;

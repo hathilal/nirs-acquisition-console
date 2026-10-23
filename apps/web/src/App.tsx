@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Bluetooth, CircleHelp, Download, Radio, ShieldCheck, Signal, Square, Waves, ChevronLeft, ChevronRight, SlidersHorizontal, Check, History as HistoryIcon, Clock3, FolderOpen, Trash2, Save } from "lucide-react";
+import { Activity, Bluetooth, CircleHelp, Download, Radio, ShieldCheck, Signal, Square, Waves, ChevronLeft, ChevronRight, SlidersHorizontal, Check, History as HistoryIcon, Clock3, FolderOpen, Trash2, Save, Mail, Send } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type Sample = { t: number; elapsed: string; intensity: number };
@@ -63,6 +63,15 @@ export default function App() {
     })),
   );
   const [isReviewingSavedSession, setIsReviewingSavedSession] = useState(false);
+  const [emailRecipient, setEmailRecipient] = useState(() => {
+    try { return window.localStorage.getItem("nirs-email-recipient") ?? ""; } catch { return ""; }
+  });
+  const [autoEmailOnFinalize, setAutoEmailOnFinalize] = useState(() => {
+    try { return window.localStorage.getItem("nirs-auto-email") === "true"; } catch { return false; }
+  });
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailStatus, setEmailStatus] = useState("");
+  const captureFinalizedRef = useRef(false);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>(() => {
     try {
       const stored = window.localStorage.getItem("nirs-acquisition-sessions");
@@ -149,7 +158,9 @@ export default function App() {
       const characteristic = await service.getCharacteristic(characteristicUuid.trim());
       deviceRef.current = device;
       characteristicRef.current = characteristic;
+      captureFinalizedRef.current = false;
       const onValue = (event: Event) => {
+        if (captureFinalizedRef.current) return;
         const target = event.target as BleCharacteristic;
         if (!target.value) return;
         const intensity = decodeIntensity(target.value);
@@ -167,6 +178,7 @@ export default function App() {
       characteristic.addEventListener("characteristicvaluechanged", onValue);
       await characteristic.startNotifications();
       setMode("ble");
+      captureFinalizedRef.current = false;
       setIsReviewingSavedSession(false);
       setIsRunning(true);
       setDeviceName(device.name || "ESP32 BLE device");
@@ -195,6 +207,83 @@ export default function App() {
     anchor.download = "nirs-samples.csv";
     anchor.click();
     URL.revokeObjectURL(url);
+  };
+
+  const sendSessionEmail = useCallback(async () => {
+    const recipient = emailRecipient.trim();
+    if (!recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+      setEmailStatus("Enter a valid recipient email address first.");
+      return false;
+    }
+    if (!workflowData.length) {
+      setEmailStatus("There are no processed samples to send.");
+      return false;
+    }
+    const csv = ["elapsed_seconds,elapsed,intensity_raw,processed,filtered", ...workflowData.map((s) => `${s.t},${s.elapsed},${s.intensity},${s.processed.toFixed(6)},${s.filtered.toFixed(6)}`)].join("\n");
+    if (new Blob([csv]).size > 4 * 1024 * 1024) {
+      setEmailStatus("This CSV is too large for email delivery. Download the CSV and send it using your normal secure file-sharing method.");
+      return false;
+    }
+    setEmailSending(true);
+    setEmailStatus("Sending processed CSV report…");
+    try {
+      const response = await fetch("/.netlify/functions/send-session-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient,
+          csv,
+          deviceName,
+          mode,
+          sampleCount: workflowData.length,
+          processingMode,
+          filterType,
+          filterWindow,
+          rawMean: processingStats.mean,
+          rawStandardDeviation: processingStats.sd,
+          sessionFinishedAt: new Date().toISOString(),
+        }),
+      });
+      const result = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(result.error || "Email delivery failed.");
+      setEmailStatus(result.message || `Report sent to ${recipient}.`);
+      setNotice(`Processed session report sent to ${recipient}.`);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Email delivery failed.";
+      setEmailStatus(message);
+      setNotice(`Email was not sent: ${message}`);
+      return false;
+    } finally {
+      setEmailSending(false);
+    }
+  }, [emailRecipient, workflowData, deviceName, mode, processingMode, filterType, filterWindow, processingStats]);
+
+  const finishSession = async () => {
+    captureFinalizedRef.current = true;
+    setIsRunning(false);
+    if (autoEmailOnFinalize) {
+      if (!emailRecipient.trim()) {
+        setEmailStatus("Automatic email is enabled, but no recipient is configured. Enter a recipient and finish the session again.");
+        setNotice("Session finalized. Add a recipient email address before automatic delivery can run.");
+        return;
+      }
+      await sendSessionEmail();
+    } else {
+      setEmailStatus("Session finalized. Automatic email is off; use Send report now if you want to email this dataset.");
+      setNotice("Session finalized. The live demo is paused; use Send report now to email the processed CSV.");
+    }
+  };
+
+  const saveEmailSettings = (recipient: string, autoSend: boolean) => {
+    setEmailRecipient(recipient);
+    setAutoEmailOnFinalize(autoSend);
+    try {
+      window.localStorage.setItem("nirs-email-recipient", recipient);
+      window.localStorage.setItem("nirs-auto-email", String(autoSend));
+    } catch {
+      setEmailStatus("Settings could not be saved in this browser. Keep the recipient available to re-enter it.");
+    }
   };
 
   const saveSession = () => {
@@ -327,6 +416,7 @@ export default function App() {
             {chart("filtered")}
             <div className="bottom-grid">
               <div className="info-card"><div className="card-title-row"><h2>Analysis summary</h2><span className="tag good">READY</span></div><div className="detail-row"><span>Processing</span><b>{processingMode === "baseline" ? "Baseline correction" : "Z-score normalization"}</b></div><div className="detail-row"><span>Filter</span><b>{filterType === "moving-average" ? "Moving-average" : "High-pass residual"}</b></div><div className="detail-row"><span>Filter window</span><b>{filterWindow} samples</b></div><div className="detail-row"><span>Values in export</span><b>Raw + processed + filtered</b></div><div className="device-note">This export contains intensity-derived values. It does not contain calibrated HbO₂/HbR concentrations.</div><button className="button primary full-button" onClick={exportCsv}><Download size={16} /> Download analysis CSV</button><button className="button secondary full-button" onClick={saveSession}><Save size={16} /> Save session to history</button></div>
+              <div className="info-card email-report-card"><div className="card-title-row"><h2>Email delivery</h2><span className="tag neutral">REPORT</span></div><p className="plain-note">Send the processed CSV as an email attachment. Email delivery requires the server-side Netlify function and its secret settings; the browser never receives the email API key.</p><label className="field-label email-recipient-field">Recipient email<input type="email" value={emailRecipient} onChange={(event) => saveEmailSettings(event.target.value, autoEmailOnFinalize)} placeholder="researcher@example.com" autoComplete="email" /></label><label className="email-auto-option"><input type="checkbox" checked={autoEmailOnFinalize} onChange={(event) => saveEmailSettings(emailRecipient, event.target.checked)} /><span><strong>Automatically email when I finish a session</strong><small>After processing, click Finish session. The current processed CSV is then sent to the configured recipient.</small></span></label><button className="button primary full-button" onClick={finishSession} disabled={emailSending}><Check size={15} /> Finish session{autoEmailOnFinalize ? " & send report" : ""}</button><button className="button secondary full-button" onClick={() => void sendSessionEmail()} disabled={emailSending}><Send size={15} /> {emailSending ? "Sending report…" : "Send report now"}</button>{emailStatus && <div className="email-status" role="status">{emailStatus}</div>}<div className="device-note">Only send participant data to an approved recipient. For research data, confirm consent and your institution's data-handling policy first.</div></div>
               <div className="info-card"><div className="card-title-row"><h2>Quality checks</h2><span className="tag neutral">BASIC</span></div><div className="detail-row"><span>Samples in display window</span><b>{samples.length}</b></div><div className="detail-row"><span>Raw minimum</span><b>{min.toFixed(2)}</b></div><div className="detail-row"><span>Raw maximum</span><b>{max.toFixed(2)}</b></div><div className="detail-row"><span>Raw mean</span><b>{processingStats.mean.toFixed(2)}</b></div><div className="detail-row"><span>Raw standard deviation</span><b>{processingStats.sd.toFixed(2)}</b></div></div>
             </div>
           </>}

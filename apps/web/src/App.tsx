@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Bluetooth, CircleHelp, Download, Radio, ShieldCheck, Signal, Square, Waves, ChevronLeft, ChevronRight, SlidersHorizontal, Check } from "lucide-react";
+import { Activity, Bluetooth, CircleHelp, Download, Radio, ShieldCheck, Signal, Square, Waves, ChevronLeft, ChevronRight, SlidersHorizontal, Check, History as HistoryIcon, Clock3, FolderOpen, Trash2, Save } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type Sample = { t: number; elapsed: string; intensity: number };
+type SavedSession = {
+  id: string;
+  name: string;
+  savedAt: string;
+  deviceName: string;
+  mode: "demo" | "ble";
+  sampleCount: number;
+  samples: Sample[];
+  processingMode: "baseline" | "normalize";
+  filterType: "moving-average" | "high-pass";
+  filterWindow: number;
+};
 type BleCharacteristic = EventTarget & {
   value?: DataView;
   startNotifications: () => Promise<BleCharacteristic>;
@@ -43,6 +55,21 @@ export default function App() {
       intensity: Math.round(2140 + Math.sin(i / 6) * 95 + Math.sin(i / 2.4) * 22 + Math.cos(i / 13) * 38),
     })),
   );
+  const [sessionSamples, setSessionSamples] = useState<Sample[]>(() =>
+    Array.from({ length: 90 }, (_, i) => ({
+      t: i,
+      elapsed: formatElapsed(i),
+      intensity: Math.round(2140 + Math.sin(i / 6) * 95 + Math.sin(i / 2.4) * 22 + Math.cos(i / 13) * 38),
+    })),
+  );
+  const [savedSessions, setSavedSessions] = useState<SavedSession[]>(() => {
+    try {
+      const stored = window.localStorage.getItem("nirs-acquisition-sessions");
+      return stored ? (JSON.parse(stored) as SavedSession[]) : [];
+    } catch {
+      return [];
+    }
+  });
   const [mode, setMode] = useState<"demo" | "ble">("demo");
   const [isRunning, setIsRunning] = useState(true);
   const [deviceName, setDeviceName] = useState("Simulated optical sensor");
@@ -62,7 +89,9 @@ export default function App() {
     const timer = window.setInterval(() => {
       const n = counterRef.current++;
       const value = Math.round(2140 + Math.sin(n / 6) * 95 + Math.sin(n / 2.4) * 22 + Math.cos(n / 13) * 38 + (Math.random() - 0.5) * 12);
-      setSamples((prev) => [...prev, { t: n, elapsed: formatElapsed(n), intensity: value }].slice(-WINDOW_SIZE));
+      const sample = { t: n, elapsed: formatElapsed(n), intensity: value };
+      setSamples((prev) => [...prev, sample].slice(-WINDOW_SIZE));
+      setSessionSamples((prev) => [...prev, sample]);
       setSampleCount((count) => count + 1);
       setLastPacket(new Date().toLocaleTimeString());
     }, 250);
@@ -75,15 +104,15 @@ export default function App() {
   const min = useMemo(() => samples.length ? Math.min(...samples.map((s) => s.intensity)) : 0, [samples]);
   const max = useMemo(() => samples.length ? Math.max(...samples.map((s) => s.intensity)) : 0, [samples]);
   const processingStats = useMemo(() => {
-    const values = samples.map((sample) => sample.intensity);
+    const values = sessionSamples.map((sample) => sample.intensity);
     const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
     const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(values.length, 1);
     const sd = Math.sqrt(variance) || 1;
     const baseline = values[0] ?? 0;
     return { mean, sd, baseline };
-  }, [samples]);
+  }, [sessionSamples]);
   const workflowData = useMemo(() => {
-    const processed = samples.map((sample) => ({
+    const processed = sessionSamples.map((sample) => ({
       ...sample,
       processed: processingMode === "baseline"
         ? sample.intensity - processingStats.baseline
@@ -98,7 +127,7 @@ export default function App() {
         filtered: filterType === "moving-average" ? average : sample.processed - average,
       };
     });
-  }, [samples, processingMode, processingStats, filterType, filterWindow]);
+  }, [sessionSamples, processingMode, processingStats, filterType, filterWindow]);
 
   const connectBle = useCallback(async () => {
     const bluetooth = (navigator as BluetoothNavigator).bluetooth;
@@ -128,7 +157,9 @@ export default function App() {
           return;
         }
         const n = counterRef.current++;
-        setSamples((prev) => [...prev, { t: n, elapsed: formatElapsed(n), intensity }].slice(-WINDOW_SIZE));
+        const sample = { t: n, elapsed: formatElapsed(n), intensity };
+        setSamples((prev) => [...prev, sample].slice(-WINDOW_SIZE));
+        setSessionSamples((prev) => [...prev, sample]);
         setSampleCount((count) => count + 1);
         setLastPacket(new Date().toLocaleTimeString());
       };
@@ -163,11 +194,65 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const saveSession = () => {
+    if (!sessionSamples.length) {
+      setNotice("There are no samples to save yet.");
+      return;
+    }
+    const savedAt = new Date().toISOString();
+    const session: SavedSession = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: `NIRS session · ${new Date(savedAt).toLocaleString()}`,
+      savedAt,
+      deviceName,
+      mode,
+      sampleCount: sessionSamples.length,
+      samples: sessionSamples,
+      processingMode,
+      filterType,
+      filterWindow,
+    };
+    const next = [session, ...savedSessions].slice(0, 50);
+    try {
+      window.localStorage.setItem("nirs-acquisition-sessions", JSON.stringify(next));
+      setSavedSessions(next);
+      setNotice("Session saved in this browser. It will be available in Session History on this device and browser.");
+    } catch {
+      setNotice("Could not save this session in browser storage. Try exporting the CSV to keep a separate copy.");
+    }
+  };
+
+  const loadSession = (session: SavedSession) => {
+    setSessionSamples(session.samples);
+    setSamples(session.samples.slice(-WINDOW_SIZE));
+    setSampleCount(session.sampleCount);
+    counterRef.current = (session.samples[session.samples.length - 1]?.t ?? session.samples.length - 1) + 1;
+    setProcessingMode(session.processingMode);
+    setFilterType(session.filterType);
+    setFilterWindow(session.filterWindow);
+    setDeviceName(session.deviceName);
+    setMode("demo");
+    setIsRunning(false);
+    setActiveStep(0);
+    setNotice(`Loaded saved session with ${session.samples.length.toLocaleString()} samples. The live demo stream is paused so you can inspect the recorded data.`);
+  };
+
+  const deleteSession = (id: string) => {
+    const next = savedSessions.filter((session) => session.id !== id);
+    try {
+      window.localStorage.setItem("nirs-acquisition-sessions", JSON.stringify(next));
+      setSavedSessions(next);
+    } catch {
+      setNotice("Could not update browser storage. Please try again.");
+    }
+  };
+
   const steps = [
     { title: "Acquire Data", subtitle: "Connect and record raw optical intensity" },
     { title: "Signal Processing", subtitle: "Inspect and prepare the acquired signal" },
     { title: "Filter Data", subtitle: "Reduce noise and compare signal traces" },
     { title: "Analyze & Export", subtitle: "Review results and download your dataset" },
+    { title: "Session History", subtitle: "Browse and restore previous sampling sessions" },
   ];
 
   const chart = (series: "raw" | "processed" | "filtered" | "compare") => {
@@ -191,7 +276,7 @@ export default function App() {
             <span className="step-number">{activeStep > index ? <Check size={14} /> : index + 1}</span><span className="nav-text">{step.title}</span>{activeStep === index && <span className="nav-dot" />}
           </button>
         ))}
-        <button className="nav-item export-nav" onClick={exportCsv}><Download size={17} /> Export session</button>
+        <button className="nav-item export-nav" onClick={() => setActiveStep(4)}><HistoryIcon size={17} /> Session history</button><button className="nav-item export-nav" onClick={exportCsv}><Download size={17} /> Export session</button>
         <div className="side-bottom"><div className="protocol-card"><ShieldCheck size={17} /><div><strong>Signal integrity</strong><p>{mode === "ble" ? "BLE raw data" : "Demo / raw data"}</p></div><span className="tiny-status" /></div><div className="sidebar-foot">NIRS CONSOLE <span>v0.2.0</span></div></div>
       </aside>
 
@@ -202,11 +287,11 @@ export default function App() {
             {steps.map((step, index) => <button key={step.title} className={`progress-step ${activeStep === index ? "current" : ""} ${activeStep > index ? "complete" : ""}`} onClick={() => setActiveStep(index)}><span className="progress-number">{activeStep > index ? <Check size={14} /> : index + 1}</span><span className="progress-copy"><strong>{step.title}</strong><small>STEP 0{index + 1}</small></span></button>)}
           </div>
 
-          <div className="page-heading"><div><div className="eyebrow">NIRS ACQUISITION WORKFLOW · STEP 0{activeStep + 1}</div><h1>{steps[activeStep].title}</h1><p>{steps[activeStep].subtitle}</p></div><div className="heading-actions">{activeStep > 0 && <button className="button secondary" onClick={() => setActiveStep((step) => Math.max(0, step - 1))}><ChevronLeft size={16} /> Back</button>}{activeStep === 0 && (mode === "ble" ? <button className="button danger" onClick={disconnect}><Square size={14} /> Disconnect</button> : <button className="button primary" onClick={connectBle}><Bluetooth size={16} /> Connect sensor</button>)}{activeStep === 3 && <button className="button secondary" onClick={exportCsv}><Download size={16} /> Export CSV</button>}{activeStep < 3 && <button className="button primary" onClick={() => setActiveStep((step) => Math.min(3, step + 1))}>Next step <ChevronRight size={16} /></button>}</div></div>
+          <div className="page-heading"><div><div className="eyebrow">NIRS ACQUISITION WORKFLOW · STEP 0{activeStep + 1}</div><h1>{steps[activeStep].title}</h1><p>{steps[activeStep].subtitle}</p></div><div className="heading-actions">{activeStep > 0 && <button className="button secondary" onClick={() => setActiveStep((step) => Math.max(0, step - 1))}><ChevronLeft size={16} /> Back</button>}{activeStep === 0 && (mode === "ble" ? <button className="button danger" onClick={disconnect}><Square size={14} /> Disconnect</button> : <button className="button primary" onClick={connectBle}><Bluetooth size={16} /> Connect sensor</button>)}{activeStep === 3 && <><button className="button secondary" onClick={saveSession}><Save size={16} /> Save session</button><button className="button secondary" onClick={exportCsv}><Download size={16} /> Export CSV</button></>}{activeStep < 4 && <button className="button primary" onClick={() => setActiveStep((step) => Math.min(4, step + 1))}>Next step <ChevronRight size={16} /></button>}</div></div>
 
-          <div className="notice"><CircleHelp size={17} /><span>{activeStep === 0 ? notice : activeStep === 1 ? "Processing is applied to the samples currently held in the rolling session window. Choose baseline correction or z-score normalization to prepare the signal." : activeStep === 2 ? "Choose a simple smoothing or high-pass residual filter. The window is measured in samples; set a suitable sampling rate before interpreting it in seconds." : "Export includes raw, processed, and filtered columns. These are optical intensity-derived values, not direct HbO₂/HbR estimates."}</span></div>
+          <div className="notice"><CircleHelp size={17} /><span>{activeStep === 0 ? notice : activeStep === 1 ? "Processing is applied to the samples currently held in the rolling session window. Choose baseline correction or z-score normalization to prepare the signal." : activeStep === 2 ? "Choose a simple smoothing or high-pass residual filter. The window is measured in samples; set a suitable sampling rate before interpreting it in seconds." : activeStep === 3 ? "Export includes the full current session with raw, processed, and filtered columns. Save a copy to Session History for later review in this browser." : "Saved sessions are stored locally in this browser, not uploaded to a server. Export important data to CSV for backup."}</span></div>
 
-          <div className="section-title"><span>{activeStep === 0 ? "ACQUISITION SESSION" : activeStep === 1 ? "PROCESSING SETTINGS" : activeStep === 2 ? "FILTER SETTINGS" : "ANALYSIS SUMMARY"}</span><div className="section-line" /><span className="session-id">SESSION · LOCAL</span></div>
+          <div className="section-title"><span>{activeStep === 0 ? "ACQUISITION SESSION" : activeStep === 1 ? "PROCESSING SETTINGS" : activeStep === 2 ? "FILTER SETTINGS" : activeStep === 3 ? "ANALYSIS SUMMARY" : "SAVED RECORDINGS"}</span><div className="section-line" /><span className="session-id">SESSION · LOCAL</span></div>
           <div className="metric-grid">
             <div className="metric-card"><div className="metric-label">LATEST RAW INTENSITY <span className="metric-icon purple"><Activity size={17} /></span></div><div className="metric-value">{latest.toLocaleString()}<small> raw units</small></div><div className={delta >= 0 ? "metric-foot positive" : "metric-foot negative"}>{delta >= 0 ? "↑" : "↓"} {Math.abs(delta).toFixed(0)} <span>since last sample</span></div></div>
             <div className="metric-card"><div className="metric-label">SAMPLES RECEIVED <span className="metric-icon blue"><Signal size={17} /></span></div><div className="metric-value">{sampleCount.toLocaleString()}</div><div className="metric-foot muted">Session counter</div></div>
@@ -237,12 +322,29 @@ export default function App() {
           {activeStep === 3 && <>
             {chart("filtered")}
             <div className="bottom-grid">
-              <div className="info-card"><div className="card-title-row"><h2>Analysis summary</h2><span className="tag good">READY</span></div><div className="detail-row"><span>Processing</span><b>{processingMode === "baseline" ? "Baseline correction" : "Z-score normalization"}</b></div><div className="detail-row"><span>Filter</span><b>{filterType === "moving-average" ? "Moving-average" : "High-pass residual"}</b></div><div className="detail-row"><span>Filter window</span><b>{filterWindow} samples</b></div><div className="detail-row"><span>Values in export</span><b>Raw + processed + filtered</b></div><div className="device-note">This export contains intensity-derived values. It does not contain calibrated HbO₂/HbR concentrations.</div><button className="button primary full-button" onClick={exportCsv}><Download size={16} /> Download analysis CSV</button></div>
+              <div className="info-card"><div className="card-title-row"><h2>Analysis summary</h2><span className="tag good">READY</span></div><div className="detail-row"><span>Processing</span><b>{processingMode === "baseline" ? "Baseline correction" : "Z-score normalization"}</b></div><div className="detail-row"><span>Filter</span><b>{filterType === "moving-average" ? "Moving-average" : "High-pass residual"}</b></div><div className="detail-row"><span>Filter window</span><b>{filterWindow} samples</b></div><div className="detail-row"><span>Values in export</span><b>Raw + processed + filtered</b></div><div className="device-note">This export contains intensity-derived values. It does not contain calibrated HbO₂/HbR concentrations.</div><button className="button primary full-button" onClick={exportCsv}><Download size={16} /> Download analysis CSV</button><button className="button secondary full-button" onClick={saveSession}><Save size={16} /> Save session to history</button></div>
               <div className="info-card"><div className="card-title-row"><h2>Quality checks</h2><span className="tag neutral">BASIC</span></div><div className="detail-row"><span>Samples in display window</span><b>{samples.length}</b></div><div className="detail-row"><span>Raw minimum</span><b>{min.toFixed(2)}</b></div><div className="detail-row"><span>Raw maximum</span><b>{max.toFixed(2)}</b></div><div className="detail-row"><span>Raw mean</span><b>{processingStats.mean.toFixed(2)}</b></div><div className="detail-row"><span>Raw standard deviation</span><b>{processingStats.sd.toFixed(2)}</b></div></div>
             </div>
           </>}
 
-          <div className="workflow-bottom"><span>Step {activeStep + 1} of 4 · Data remains in this browser session</span><div>{activeStep > 0 && <button className="button secondary" onClick={() => setActiveStep((step) => Math.max(0, step - 1))}><ChevronLeft size={15} /> Previous</button>}{activeStep < 3 ? <button className="button primary" onClick={() => setActiveStep((step) => Math.min(3, step + 1))}>Continue to {steps[activeStep + 1].title}<ChevronRight size={15} /></button> : <button className="button secondary" onClick={() => setActiveStep(0)}>Start new workflow</button>}</div></div>
+          {activeStep === 4 && <div className="history-workspace">
+            <div className="history-intro"><div className="history-intro-icon"><HistoryIcon size={22} /></div><div><h2>Your sampling library</h2><p>Saved recordings stay in this browser so you can revisit measurements, inspect signal processing settings, and export a copy.</p></div><div className="history-total"><strong>{savedSessions.length}</strong><span>SAVED SESSIONS</span></div></div>
+            <div className="history-toolbar"><div><strong>Previous recordings</strong><span>{savedSessions.length ? "Select a session to restore its signal and processing settings." : "No saved sessions yet. Open Analyze & Export and choose Save session."}</span></div><button className="button secondary" onClick={() => setActiveStep(3)}><Save size={15} /> Save current session</button></div>
+            {savedSessions.length === 0 ? <div className="history-empty"><div className="empty-icon"><FolderOpen size={26} /></div><h3>Your session history will appear here</h3><p>Run a demo or connect a sensor, then save a session from Analyze & Export. Saved data is kept on this device and browser only.</p><button className="button primary" onClick={() => setActiveStep(0)}>Go to acquisition <ChevronRight size={15} /></button></div> : <div className="history-list">{savedSessions.map((session) => {
+              const vals = session.samples.map((sample) => sample.intensity);
+              const mean = vals.reduce((sum, value) => sum + value, 0) / Math.max(vals.length, 1);
+              const low = vals.length ? Math.min(...vals) : 0;
+              const high = vals.length ? Math.max(...vals) : 0;
+              return <article className="history-card" key={session.id}>
+                <div className="history-card-top"><div className="history-card-icon"><Activity size={18} /></div><div className="history-card-title"><h3>{session.name}</h3><span><Clock3 size={12} /> {new Date(session.savedAt).toLocaleString()}</span></div><span className={session.mode === "ble" ? "tag good" : "tag neutral"}>{session.mode === "ble" ? "BLE CAPTURE" : "DEMO / LOADED"}</span></div>
+                <div className="history-metrics"><div><span>Samples saved</span><strong>{session.samples.length.toLocaleString()}</strong></div><div><span>Raw mean</span><strong>{mean.toFixed(2)}</strong></div><div><span>Raw range</span><strong>{low.toFixed(0)} – {high.toFixed(0)}</strong></div><div><span>Filter</span><strong>{session.filterType === "moving-average" ? "Moving average" : "High-pass residual"}</strong></div></div>
+                <div className="history-card-bottom"><span>{session.deviceName} · {session.processingMode === "baseline" ? "Baseline correction" : "Z-score normalization"} · {session.filterWindow}-sample window</span><div><button className="button secondary" onClick={() => { loadSession(session); setActiveStep(3); }}><FolderOpen size={14} /> Load session</button><button className="button danger" onClick={() => deleteSession(session.id)}><Trash2 size={14} /> Delete</button></div></div>
+              </article>;
+            })}</div>}
+            <div className="history-privacy"><ShieldCheck size={16} /><span>Privacy note: saved recordings remain in this browser's local storage. They are not synced to your Netlify site or other devices. Export CSV files for backup; avoid storing identifiable participant data on shared computers.</span></div>
+          </div>}
+
+          <div className="workflow-bottom"><span>Step {activeStep + 1} of 5 · Data stays in this browser session unless you save it to history</span><div>{activeStep > 0 && <button className="button secondary" onClick={() => setActiveStep((step) => Math.max(0, step - 1))}><ChevronLeft size={15} /> Previous</button>}{activeStep < 4 ? <button className="button primary" onClick={() => setActiveStep((step) => Math.min(4, step + 1))}>Continue to {steps[activeStep + 1].title}<ChevronRight size={15} /></button> : <button className="button secondary" onClick={() => setActiveStep(0)}>Back to acquisition</button>}</div></div>
           <footer className="page-footer"><span>Research prototype · Not a medical device</span><span>Data is processed locally in this browser session.</span></footer>
         </div>
       </section>

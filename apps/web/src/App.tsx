@@ -62,6 +62,7 @@ export default function App() {
       intensity: Math.round(2140 + Math.sin(i / 6) * 95 + Math.sin(i / 2.4) * 22 + Math.cos(i / 13) * 38),
     })),
   );
+  const [isReviewingSavedSession, setIsReviewingSavedSession] = useState(false);
   const [savedSessions, setSavedSessions] = useState<SavedSession[]>(() => {
     try {
       const stored = window.localStorage.getItem("nirs-acquisition-sessions");
@@ -166,6 +167,7 @@ export default function App() {
       characteristic.addEventListener("characteristicvaluechanged", onValue);
       await characteristic.startNotifications();
       setMode("ble");
+      setIsReviewingSavedSession(false);
       setIsRunning(true);
       setDeviceName(device.name || "ESP32 BLE device");
       setNotice("Connected. Values are displayed as raw decoded intensity/counts; no HbO₂/HbR conversion is applied.");
@@ -179,6 +181,7 @@ export default function App() {
     deviceRef.current = null;
     characteristicRef.current = null;
     setMode("demo");
+    setIsReviewingSavedSession(false);
     setIsRunning(true);
     setDeviceName("Simulated optical sensor");
     setNotice("Disconnected. Demo signal is active; reconnect when the device protocol is confirmed.");
@@ -224,6 +227,7 @@ export default function App() {
 
   const loadSession = (session: SavedSession) => {
     setSessionSamples(session.samples);
+    setIsReviewingSavedSession(true);
     setSamples(session.samples.slice(-WINDOW_SIZE));
     setSampleCount(session.sampleCount);
     counterRef.current = (session.samples[session.samples.length - 1]?.t ?? session.samples.length - 1) + 1;
@@ -281,7 +285,7 @@ export default function App() {
       </aside>
 
       <section className="main-area">
-        <header className="topbar"><div className="crumb">Workspace <span>/</span> <b>{steps[activeStep].title}</b></div><div className="top-right"><span className={mode === "ble" ? "connection-pill connected" : "connection-pill"}><span className="status-dot" />{mode === "ble" ? "DEVICE CONNECTED" : "DEMO MODE"}</span><div className="avatar">NL</div></div></header>
+        <header className="topbar"><div className="crumb">Workspace <span>/</span> <b>{steps[activeStep].title}</b></div><div className="top-right"><span className={mode === "ble" ? "connection-pill connected" : "connection-pill"}><span className="status-dot" />{isReviewingSavedSession ? "SAVED SESSION" : mode === "ble" ? "DEVICE CONNECTED" : "DEMO MODE"}</span><div className="avatar">NL</div></div></header>
         <div className="content">
           <div className="workflow-progress" aria-label="Workflow progress">
             {steps.map((step, index) => <button key={step.title} className={`progress-step ${activeStep === index ? "current" : ""} ${activeStep > index ? "complete" : ""}`} onClick={() => setActiveStep(index)}><span className="progress-number">{activeStep > index ? <Check size={14} /> : index + 1}</span><span className="progress-copy"><strong>{step.title}</strong><small>STEP 0{index + 1}</small></span></button>)}
@@ -296,14 +300,14 @@ export default function App() {
             <div className="metric-card"><div className="metric-label">LATEST RAW INTENSITY <span className="metric-icon purple"><Activity size={17} /></span></div><div className="metric-value">{latest.toLocaleString()}<small> raw units</small></div><div className={delta >= 0 ? "metric-foot positive" : "metric-foot negative"}>{delta >= 0 ? "↑" : "↓"} {Math.abs(delta).toFixed(0)} <span>since last sample</span></div></div>
             <div className="metric-card"><div className="metric-label">SAMPLES RECEIVED <span className="metric-icon blue"><Signal size={17} /></span></div><div className="metric-value">{sampleCount.toLocaleString()}</div><div className="metric-foot muted">Session counter</div></div>
             <div className="metric-card"><div className="metric-label">RAW RANGE <span className="metric-icon teal"><Waves size={17} /></span></div><div className="metric-value">{(max - min).toLocaleString()}<small> units</small></div><div className="metric-foot muted">Min {min.toLocaleString()} · Max {max.toLocaleString()}</div></div>
-            <div className="metric-card"><div className="metric-label">STREAM STATUS <span className="metric-icon green"><Radio size={17} /></span></div><div className="metric-value status-value"><span className="live-pulse" />{isRunning ? "Streaming" : "Paused"}</div><div className="metric-foot muted">{mode === "ble" ? "BLE notifications" : "Synthetic demo signal"}</div></div>
+            <div className="metric-card"><div className="metric-label">STREAM STATUS <span className="metric-icon green"><Radio size={17} /></span></div><div className="metric-value status-value"><span className="live-pulse" />{isReviewingSavedSession ? "Reviewing" : isRunning ? "Streaming" : "Paused"}</div><div className="metric-foot muted">{isReviewingSavedSession ? "Saved recording · not live" : mode === "ble" ? "BLE notifications" : "Synthetic demo signal"}</div></div>
           </div>
 
           {activeStep === 0 && <>
             {chart("raw")}
             <div className="bottom-grid">
               <div className="info-card"><div className="card-title-row"><h2>Device connection</h2><span className={mode === "ble" ? "tag good" : "tag neutral"}>{mode === "ble" ? "CONNECTED" : "DEMO MODE"}</span></div><div className="device-row"><div className="device-icon"><Bluetooth size={20} /></div><div className="device-meta"><strong>{deviceName}</strong><span>{mode === "ble" ? "BLE GATT notifications active" : "ESP32 · BLE transport expected"}</span></div><span className={mode === "ble" ? "device-state on" : "device-state"} /></div><div className="detail-row"><span>Transport</span><b>{mode === "ble" ? "Bluetooth LE" : "Simulated signal"}</b></div><div className="detail-row"><span>Samples in rolling window</span><b>{samples.length}</b></div><div className="detail-row"><span>Last packet</span><b>{lastPacket}</b></div><div className="device-note">Confirm firmware GATT UUIDs, packet framing, byte order, and sampling rate before research use.</div></div>
-              <div className="info-card"><div className="card-title-row"><h2>Before proceeding</h2><span className="tag neutral">CHECKLIST</span></div><div className="check-row"><Check size={16} /><span>Raw intensity stream is available</span></div><div className="check-row"><Check size={16} /><span>Sample counter is active</span></div><div className="check-row"><CircleHelp size={16} /><span>Confirm device calibration and protocol before collecting research data</span></div><button className="button secondary full-button" onClick={() => setIsRunning((running) => !running)} disabled={mode === "ble"}>{isRunning ? <Square size={14} /> : <Activity size={14} />}{isRunning ? "Pause demo stream" : "Resume demo stream"}</button></div>
+              <div className="info-card"><div className="card-title-row"><h2>Before proceeding</h2><span className="tag neutral">CHECKLIST</span></div><div className="check-row"><Check size={16} /><span>Raw intensity stream is available</span></div><div className="check-row"><Check size={16} /><span>Sample counter is active</span></div><div className="check-row"><CircleHelp size={16} /><span>Confirm device calibration and protocol before collecting research data</span></div><button className="button secondary full-button" onClick={() => { setIsReviewingSavedSession(false); setIsRunning((running) => !running); }} disabled={mode === "ble"}>{isRunning ? <Square size={14} /> : <Activity size={14} />}{isRunning ? "Pause demo stream" : "Resume demo stream"}</button></div>
             </div>
           </>}
 
@@ -333,8 +337,8 @@ export default function App() {
             {savedSessions.length === 0 ? <div className="history-empty"><div className="empty-icon"><FolderOpen size={26} /></div><h3>Your session history will appear here</h3><p>Run a demo or connect a sensor, then save a session from Analyze & Export. Saved data is kept on this device and browser only.</p><button className="button primary" onClick={() => setActiveStep(0)}>Go to acquisition <ChevronRight size={15} /></button></div> : <div className="history-list">{savedSessions.map((session) => {
               const vals = session.samples.map((sample) => sample.intensity);
               const mean = vals.reduce((sum, value) => sum + value, 0) / Math.max(vals.length, 1);
-              const low = vals.length ? Math.min(...vals) : 0;
-              const high = vals.length ? Math.max(...vals) : 0;
+              const low = vals.reduce((minValue, value) => Math.min(minValue, value), Number.POSITIVE_INFINITY);
+              const high = vals.reduce((maxValue, value) => Math.max(maxValue, value), Number.NEGATIVE_INFINITY);
               return <article className="history-card" key={session.id}>
                 <div className="history-card-top"><div className="history-card-icon"><Activity size={18} /></div><div className="history-card-title"><h3>{session.name}</h3><span><Clock3 size={12} /> {new Date(session.savedAt).toLocaleString()}</span></div><span className={session.mode === "ble" ? "tag good" : "tag neutral"}>{session.mode === "ble" ? "BLE CAPTURE" : "DEMO / LOADED"}</span></div>
                 <div className="history-metrics"><div><span>Samples saved</span><strong>{session.samples.length.toLocaleString()}</strong></div><div><span>Raw mean</span><strong>{mean.toFixed(2)}</strong></div><div><span>Raw range</span><strong>{low.toFixed(0)} – {high.toFixed(0)}</strong></div><div><span>Filter</span><strong>{session.filterType === "moving-average" ? "Moving average" : "High-pass residual"}</strong></div></div>

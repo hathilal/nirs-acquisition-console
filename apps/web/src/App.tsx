@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Bluetooth, CircleHelp, Download, Radio, ShieldCheck, Signal, Square, Waves, ChevronLeft, ChevronRight, SlidersHorizontal, Check, History as HistoryIcon, Clock3, FolderOpen, Trash2, Save, Mail, Send } from "lucide-react";
+import { Activity, Bluetooth, CircleHelp, Download, Radio, ShieldCheck, Signal, Square, Waves, ChevronLeft, ChevronRight, SlidersHorizontal, Check, History as HistoryIcon, Clock3, FolderOpen, Trash2, Save, Send } from "lucide-react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 type Sample = { t: number; elapsed: string; intensity: number };
